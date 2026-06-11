@@ -21,6 +21,9 @@ GAME_NAME = "Standoff 2"
 CHANNEL_ID = "@hp404faceit"
 HEAD_ADMIN_USERNAME = "nelinner"
 
+# Постоянный путь к базе данных (не удаляется при перезапуске Pydroid)
+DB_PATH = "/storage/emulated/0/404hp_faceit.db"
+
 # Изображения (замените ссылки на свои)
 MAIN_MENU_IMAGE = "https://ibb.co/yczGh1yQ"          # Главное меню
 REGISTRATION_IMAGE = "https://ibb.co/SD6Sz7Tf"     # Регистрация
@@ -68,7 +71,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # ---------- БАЗА ДАННЫХ ----------
 def init_db():
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY, username TEXT, nickname TEXT UNIQUE,
@@ -87,9 +90,8 @@ def init_db():
     try:
         c.execute("ALTER TABLE users ADD COLUMN premium_expiry TEXT")
     except sqlite3.OperationalError:
-        pass  # столбец уже есть – ничего не делаем
+        pass
 
-    # Остальные таблицы
     c.execute('''CREATE TABLE IF NOT EXISTS lobbies (
         lobby_id INTEGER PRIMARY KEY AUTOINCREMENT, creator_id INTEGER,
         lobby_code TEXT UNIQUE, map_name TEXT, max_players INTEGER DEFAULT 10,
@@ -116,7 +118,7 @@ def init_db():
     conn.close()
 
 def one_time_elo_reset():
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT value FROM settings WHERE key='elo_reset_done'")
     if not c.fetchone():
@@ -125,6 +127,7 @@ def one_time_elo_reset():
         conn.commit()
         logger.info("✅ Все игроки получили 0 ELO (однократный сброс)")
     conn.close()
+
 # ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 def hash_password(password, salt=None):
     if salt is None: salt = secrets.token_hex(16)
@@ -155,7 +158,7 @@ def get_rank(elo):
 def gen_lobby_code(): return secrets.token_hex(4).upper()
 
 def get_lobby_players_text(lobby_id):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT nickname, role FROM lobby_players WHERE lobby_id=? ORDER BY join_order", (lobby_id,))
     players = c.fetchall()
@@ -170,7 +173,7 @@ def get_lobby_players_text(lobby_id):
     return txt
 
 async def update_lobby_post(lobby_id):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""SELECT l.message_id, l.map_name, l.lobby_code, l.status, l.current_players,
                  u.nickname, u.elo, u.rank
@@ -203,7 +206,7 @@ async def update_lobby_post(lobby_id):
         logger.error(f"Ошибка обновления поста лобби: {e}")
 
 def update_stats(user_id, winner):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT elo, matches_played, wins, losses, winrate FROM users WHERE user_id=?", (user_id,))
     u = c.fetchone()
@@ -222,7 +225,7 @@ def update_stats(user_id, winner):
         parse_mode="Markdown"))
 
 def is_premium_active(user_id):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT premium_expiry FROM users WHERE user_id=?", (user_id,))
     row = c.fetchone()
@@ -236,7 +239,7 @@ def is_premium_active(user_id):
     return False
 
 def has_permission(user_id, permission):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT role, premium_expiry FROM users WHERE user_id=?", (user_id,))
     user = c.fetchone()
@@ -266,7 +269,7 @@ def has_permission(user_id, permission):
     return permission in allowed or "*" in allowed
 
 def main_menu(user_id):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT role FROM users WHERE user_id=?", (user_id,))
     row = c.fetchone()
@@ -324,7 +327,7 @@ async def start(msg: types.Message, state: FSMContext):
                 [InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")]
             ]))
         return
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT * FROM users WHERE user_id=?", (msg.from_user.id,))
     u = c.fetchone()
@@ -348,13 +351,13 @@ async def check_sub_btn(cb: types.CallbackQuery):
     else:
         await cb.answer("❌ Не подписаны", show_alert=True)
 
-# ---------- РЕГИСТРАЦИЯ (используется REGISTRATION_IMAGE) ----------
+# ---------- РЕГИСТРАЦИЯ ----------
 @dp.message(Reg.nick)
 async def reg_nick(msg: types.Message, state: FSMContext):
     nick = msg.text.strip()
     if len(nick)<3 or len(nick)>24 or not nick.replace('_','').replace('-','').isalnum():
         await msg.answer_photo(REGISTRATION_IMAGE, caption="❌ Некорректный ник"); return
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     if conn.execute("SELECT 1 FROM users WHERE nickname=?", (nick,)).fetchone():
         await msg.answer_photo(REGISTRATION_IMAGE, caption="❌ Занят"); conn.close(); return
     conn.close()
@@ -382,7 +385,7 @@ async def reg_pw2(msg: types.Message, state: FSMContext):
     is_dir = (msg.from_user.username == HEAD_ADMIN_USERNAME)
     role = UserRole.DIRECTOR if is_dir else UserRole.PLAYER
     h, s = hash_password(pw)
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.execute("INSERT INTO users (user_id,username,nickname,password_hash,salt,role,registration_date) VALUES (?,?,?,?,?,?,?)",
                  (user_id, uname, nick, h, s, role, datetime.now().isoformat()))
     conn.commit(); conn.close()
@@ -397,18 +400,18 @@ async def login(msg: types.Message):
     parts = msg.text.split()
     if len(parts)!=3: await msg.answer_photo(MAIN_MENU_IMAGE, caption="/login ник пароль"); return
     nick, pw = parts[1], parts[2]
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     u = conn.execute("SELECT user_id, password_hash, salt, role FROM users WHERE nickname=?", (nick,)).fetchone()
     conn.close()
     if not u: await msg.answer_photo(MAIN_MENU_IMAGE, caption="❌ Не найден"); return
     if verify_password(pw, u[2], u[1]):
-        conn = sqlite3.connect('404hp_faceit.db')
+        conn = sqlite3.connect(DB_PATH)
         conn.execute("UPDATE users SET user_id=? WHERE nickname=?", (msg.from_user.id, nick))
         conn.commit(); conn.close()
         await msg.answer_photo(MAIN_MENU_IMAGE, caption=f"✅ Вход выполнен!\nРоль: {ROLE_NAMES[u[3]]}")
     else: await msg.answer_photo(MAIN_MENU_IMAGE, caption="❌ Неверный пароль")
 
-# ---------- СОЗДАНИЕ ЛОББИ (используется LOBBY_CREATE_IMAGE) ----------
+# ---------- СОЗДАНИЕ ЛОББИ ----------
 @dp.callback_query(lambda c: c.data == "create_lobby")
 async def lobby_start(cb: types.CallbackQuery, state: FSMContext):
     if not has_permission(cb.from_user.id, "create_lobby"):
@@ -441,7 +444,7 @@ async def publish_lobby(cb: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     map_id, code = data['map'], data['code']
     user_id = cb.from_user.id
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT nickname, elo, rank, role FROM users WHERE user_id=?", (user_id,))
     creator = c.fetchone()
@@ -480,7 +483,7 @@ async def publish_lobby(cb: types.CallbackQuery, state: FSMContext):
 async def join_lobby_btn(cb: types.CallbackQuery):
     lobby_id = int(cb.data.split("_")[2])
     user_id = cb.from_user.id
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT creator_id, current_players, max_players, status FROM lobbies WHERE lobby_id=? AND status='open'", (lobby_id,))
     lobby = c.fetchone()
@@ -506,7 +509,7 @@ async def join_lobby_btn(cb: types.CallbackQuery):
 async def draw_teams(cb: types.CallbackQuery):
     lobby_id = int(cb.data.split("_")[2])
     user_id = cb.from_user.id
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT creator_id, current_players FROM lobbies WHERE lobby_id=?", (lobby_id,))
     lobby = c.fetchone()
@@ -546,7 +549,7 @@ async def match_result_start(msg: types.Message, state: FSMContext):
     await state.set_state(MatchResFSM.photo)
 
 async def is_admin(user_id):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     role = conn.execute("SELECT role FROM users WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
     return role and role[0] in [UserRole.ADMIN, UserRole.HEAD_ADMIN, UserRole.DIRECTOR]
@@ -563,7 +566,7 @@ async def match_result_score(msg: types.Message, state: FSMContext):
         ct, t, lid = map(int, msg.text.split())
         data = await state.get_data()
         photo = data['photo']
-        conn = sqlite3.connect('404hp_faceit.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         teams = c.execute("SELECT team_id, team_side FROM match_teams WHERE lobby_id=?", (lid,)).fetchall()
         if len(teams)!=2: await msg.answer_photo(MAIN_MENU_IMAGE, caption="Лобби не найдено"); conn.close(); return
@@ -595,7 +598,7 @@ async def match_result_score(msg: types.Message, state: FSMContext):
 @dp.callback_query(lambda c: c.data == "profile")
 async def profile(cb: types.CallbackQuery):
     user_id = cb.from_user.id
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     u = conn.execute("SELECT nickname, role, elo, rank, matches_played, wins, losses, draws, winrate, kd_ratio, total_kills, total_deaths, headshots, mvps, registration_date, last_match_date, premium_expiry FROM users WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
     if not u: await cb.answer("Профиль не найден", show_alert=True); return
@@ -625,10 +628,10 @@ async def profile(cb: types.CallbackQuery):
             [InlineKeyboardButton(text="🔙 Меню", callback_data="back_to_main")]
         ]))
 
-# ---------- РЕЙТИНГ (используется LEADERBOARD_IMAGE) ----------
+# ---------- РЕЙТИНГ ----------
 @dp.callback_query(lambda c: c.data == "leaderboard")
 async def leaderboard(cb: types.CallbackQuery):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     top = conn.execute("SELECT nickname, elo, rank, wins, losses, winrate, kd_ratio, role, premium_expiry FROM users WHERE is_banned=0 ORDER BY elo DESC LIMIT 15").fetchall()
     conn.close()
     txt = "🏆 **ТОП-15**\n" + "="*30 + "\n\n"
@@ -670,7 +673,7 @@ async def admin_panel(cb: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "admin_users")
 async def admin_users(cb: types.CallbackQuery):
     if not await is_admin(cb.from_user.id): return
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     users = conn.execute("SELECT nickname, role, elo, is_banned FROM users LIMIT 20").fetchall()
     conn.close()
     txt = "👥 Пользователи:\n" + "\n".join(f"{u[0]} | {ROLE_NAMES.get(u[1],'?')} | ELO: {u[2]} | {'🚫 Бан' if u[3] else '✅'}" for u in users)
@@ -680,7 +683,7 @@ async def admin_users(cb: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data == "admin_bans")
 async def admin_bans(cb: types.CallbackQuery):
     if not await is_admin(cb.from_user.id): return
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     bans = conn.execute("SELECT nickname, ban_reason FROM users WHERE is_banned=1").fetchall()
     conn.close()
     txt = "🚫 Бан-лист:\n" + ("\n".join(f"{b[0]}: {b[1]}" for b in bans) if bans else "Пусто")
@@ -696,7 +699,7 @@ async def admin_assign(cb: types.CallbackQuery, state: FSMContext):
 @dp.message(AdminFSM.assign)
 async def assign_admin(msg: types.Message, state: FSMContext):
     target = msg.text.strip().replace("@","")
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     if target.isdigit():
         user = c.execute("SELECT user_id, nickname, role FROM users WHERE user_id=?", (int(target),)).fetchone()
@@ -720,7 +723,7 @@ async def premium_give_start(cb: types.CallbackQuery, state: FSMContext):
 @dp.message(AdminFSM.premium_user)
 async def premium_give_user(msg: types.Message, state: FSMContext):
     target = msg.text.strip().replace("@","")
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     if target.isdigit():
         user = c.execute("SELECT user_id, nickname FROM users WHERE user_id=?", (int(target),)).fetchone()
@@ -750,7 +753,7 @@ async def premium_give_duration(cb: types.CallbackQuery, state: FSMContext):
     else:
         expiry = (datetime.now() + timedelta(days=365)).isoformat()
         dur_text = "1 год"
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE users SET premium_expiry=? WHERE user_id=?", (expiry, user_id))
     conn.commit()
     conn.close()
@@ -773,7 +776,7 @@ async def premium_revoke_start(cb: types.CallbackQuery, state: FSMContext):
 @dp.message(PremiumRevoke.user)
 async def premium_revoke_user(msg: types.Message, state: FSMContext):
     target = msg.text.strip().replace("@","")
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     if target.isdigit():
         user = c.execute("SELECT user_id, nickname FROM users WHERE user_id=?", (int(target),)).fetchone()
@@ -794,7 +797,7 @@ async def premium_revoke_user(msg: types.Message, state: FSMContext):
 # ---------- ВОЗВРАТ В МЕНЮ ----------
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(cb: types.CallbackQuery):
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     u = conn.execute("SELECT role, nickname, elo, rank FROM users WHERE user_id=?", (cb.from_user.id,)).fetchone()
     conn.close()
     if u:
@@ -807,7 +810,7 @@ async def back_to_main(cb: types.CallbackQuery):
 
 # ---------- ОЧИСТКА ИСТЁКШИХ PREMIUM ----------
 def clean_expired_premium():
-    conn = sqlite3.connect('404hp_faceit.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     now = datetime.now().isoformat()
     c.execute("UPDATE users SET premium_expiry=NULL WHERE premium_expiry IS NOT NULL AND premium_expiry < ?", (now,))
@@ -819,7 +822,7 @@ async def main():
     init_db()
     one_time_elo_reset()
     clean_expired_premium()
-    print(f"🔥 {PROJECT_NAME} запущен! (все ELO = 0)")
+    print(f"🔥 {PROJECT_NAME} запущен! База: {DB_PATH}")
     while True:
         try:
             await dp.start_polling(bot)
